@@ -19,7 +19,7 @@ irm https://raw.githubusercontent.com/elkaszcz/el-commander-releases/main/instal
 cm --update
 ```
 
-### Checkign version
+### Checking version
 ```
 cm --version
 ```
