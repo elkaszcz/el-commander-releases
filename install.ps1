@@ -3,13 +3,17 @@
 # Usage:
 #   irm https://raw.githubusercontent.com/elkaszcz/el-commander-releases/main/install.ps1 | iex
 #
-# Downloads the latest release, verifies its SHA-256 checksum, installs cm.exe
-# to ~\tools, adds ~\tools to your user PATH, and installs a `cm` wrapper that
-# follows el-commander into its last directory when you quit.
+# Downloads the latest release, verifies its Minisign signature and SHA-256
+# checksum, installs cm.exe to ~\tools, adds ~\tools to your user PATH, and
+# installs a `cm` wrapper that follows el-commander into its last directory
+# when you quit.
 $ErrorActionPreference = "Stop"
 
 $Repo       = "elkaszcz/el-commander-releases"
 $InstallDir = Join-Path $HOME "tools"
+# Release signing key (#28). Must match MINISIGN_PUBKEY in the binary
+# (crates/elc-app/src/update.rs) and the -P key in release.yml.
+$MinisignPubKey = "RWQ2phjehTa48pOz8sOJEliKh7S5FVT+YBcyerOJTjrBXwsX7oAkWAwD"
 
 function Fail($msg) { Write-Host "Error: $msg" -ForegroundColor Red; exit 1 }
 
@@ -34,13 +38,30 @@ $tmp   = Join-Path $env:TEMP ("cm-install-" + [guid]::NewGuid())
 New-Item -ItemType Directory -Path $tmp -Force | Out-Null
 
 try {
-    # 3. Download the archive and the checksum manifest.
+    # 3. Download the archive, the checksum manifest, and its signature.
     $zip = Join-Path $tmp $asset
     Write-Host "Downloading $asset ..."
     Invoke-WebRequest -Uri "$base/$asset" -OutFile $zip -UseBasicParsing
     $sums = Join-Path $tmp "SHA256SUMS"
     Write-Host "Downloading SHA256SUMS ..."
     Invoke-WebRequest -Uri "$base/SHA256SUMS" -OutFile $sums -UseBasicParsing
+    $sig = Join-Path $tmp "SHA256SUMS.minisig"
+    Write-Host "Downloading SHA256SUMS.minisig ..."
+    Invoke-WebRequest -Uri "$base/SHA256SUMS.minisig" -OutFile $sig -UseBasicParsing
+
+    # 3b. Verify the SHA256SUMS signature against the release key (#28). A
+    #     leaked publish token is then insufficient to ship a malicious binary:
+    #     forging the manifest requires the (separate) signing key.
+    $minisign = Get-Command minisign -ErrorAction SilentlyContinue
+    if ($minisign) {
+        Write-Host "Verifying signature ..."
+        & $minisign.Source -Vm $sums -x $sig -P $MinisignPubKey | Out-Null
+        if ($LASTEXITCODE -ne 0) { Fail "Signature verification failed -- refusing to install." }
+    } else {
+        Write-Host "Warning: minisign not installed; skipping signature verification." -ForegroundColor Yellow
+        Write-Host "         The SHA-256 checksum is still enforced below. For full" -ForegroundColor Yellow
+        Write-Host "         verification install minisign: https://jedisct1.github.io/minisign/" -ForegroundColor Yellow
+    }
 
     # 4. Verify the checksum before installing.
     Write-Host "Verifying checksum ..."

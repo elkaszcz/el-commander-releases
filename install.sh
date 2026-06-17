@@ -4,13 +4,16 @@
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/elkaszcz/el-commander-releases/main/install.sh | sh
 #
-# Downloads the latest release, verifies its SHA-256 checksum, installs the
-# `cm` binary to ~/tools, and adds ~/tools to your PATH.
+# Downloads the latest release, verifies its Minisign signature and SHA-256
+# checksum, installs the `cm` binary to ~/tools, and adds ~/tools to your PATH.
 set -eu
 
 REPO="elkaszcz/el-commander-releases"
 INSTALL_DIR="$HOME/tools"
 BIN="cm"
+# Release signing key (#28). Must match MINISIGN_PUBKEY in the binary
+# (crates/elc-app/src/update.rs) and the -P key in release.yml.
+MINISIGN_PUBKEY="RWQ2phjehTa48pOz8sOJEliKh7S5FVT+YBcyerOJTjrBXwsX7oAkWAwD"
 
 red='\033[31m'; green='\033[32m'; reset='\033[0m'
 err()  { printf "${red}Error:${reset} %s\n" "$1" >&2; exit 1; }
@@ -61,10 +64,25 @@ base="https://github.com/$REPO/releases/download/$tag"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT INT TERM
 
-# 3. Download the archive and the checksum manifest.
+# 3. Download the archive, the checksum manifest, and its signature.
 info "Downloading $asset ..."
-dl "$base/$asset" "$tmp/$asset"         || err "Download failed: $base/$asset"
-dl "$base/SHA256SUMS" "$tmp/SHA256SUMS" || err "Could not download SHA256SUMS."
+dl "$base/$asset" "$tmp/$asset"                     || err "Download failed: $base/$asset"
+dl "$base/SHA256SUMS" "$tmp/SHA256SUMS"             || err "Could not download SHA256SUMS."
+dl "$base/SHA256SUMS.minisig" "$tmp/SHA256SUMS.minisig" \
+  || err "Could not download SHA256SUMS.minisig."
+
+# 3b. Verify the SHA256SUMS signature against the release key (#28). This is
+#     what makes a leaked publish token insufficient to ship a malicious
+#     binary: forging the manifest requires the (separate) signing key.
+if command -v minisign >/dev/null 2>&1; then
+  info "Verifying signature ..."
+  minisign -Vm "$tmp/SHA256SUMS" -x "$tmp/SHA256SUMS.minisig" -P "$MINISIGN_PUBKEY" \
+    >/dev/null || err "Signature verification failed -- refusing to install."
+else
+  printf "${red}Warning:${reset} minisign not installed; skipping signature verification.\n" >&2
+  printf "         The SHA-256 checksum is still enforced below. For full\n" >&2
+  printf "         verification install minisign: https://jedisct1.github.io/minisign/\n" >&2
+fi
 
 # 4. Verify the checksum before touching the filesystem.
 info "Verifying checksum ..."

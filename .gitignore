@@ -1,0 +1,4 @@
+# Minisign signing material — NEVER commit the private key (#28).
+# Only minisign.pub (the public key) is safe to track here.
+minisign.key
+*.minisign.key
