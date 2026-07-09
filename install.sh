@@ -34,6 +34,7 @@ case "$os" in
     case "$arch" in
       x86_64)        target="x86_64-unknown-linux-gnu" ;;
       aarch64|arm64) target="aarch64-unknown-linux-gnu" ;;
+      armv7l|armv7)  target="armv7-unknown-linux-gnueabihf" ;;
       *) err "Unsupported Linux architecture: $arch" ;;
     esac ;;
   *) err "Unsupported OS: $os. On Windows, use install.ps1 instead." ;;
