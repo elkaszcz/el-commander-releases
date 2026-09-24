@@ -1,0 +1,774 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>el-commander — Two panes. Zero shell-outs.</title>
+<meta name="description" content="A blazing fast, safe dual-pane terminal file manager written in Rust, inspired by Midnight Commander.">
+<meta name="theme-color" content="#0000AB">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%230000AB'/%3E%3Crect x='3' y='3' width='12' height='26' fill='none' stroke='%23BFBFBF' stroke-width='2'/%3E%3Crect x='17' y='3' width='12' height='26' fill='none' stroke='%23BFBFBF' stroke-width='2'/%3E%3Crect x='4' y='9' width='10' height='4' fill='%234FAFB1'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700;800&display=swap" rel="stylesheet">
+<style>
+/* palette sampled from a real el-commander screenshot */
+:root{
+  --blue:#0000AB; --cyan:#4FAFB1; --black:#000; --grey:#BFBFBF; --white:#E5E5E5;
+  --yellow:#E5E54F; --olive:#99992F; --mag:#C23BCB; --dlg:#BFBFBF; --navy:#000080; --green:#3FD46B;
+  --mono:"JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+  --ch:0.6em;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth;overflow-x:clip;scroll-padding-top:48px}
+body{background:var(--blue);color:var(--grey);font-family:var(--mono);font-size:16px;line-height:1.6;-webkit-font-smoothing:antialiased;padding-bottom:34px}
+a{color:inherit;text-decoration:none}
+::selection{background:var(--cyan);color:var(--black)}
+code{color:var(--white)}
+/* faint CRT scanlines */
+body::after{content:"";position:fixed;inset:0;pointer-events:none;z-index:50;background:repeating-linear-gradient(to bottom,rgba(0,0,0,.07) 0 1px,transparent 1px 3px)}
+.wrap{max-width:1392px;margin:0 auto;padding:0 24px}
+
+/* menu bar */
+.menubar{position:sticky;top:0;z-index:40;background:var(--cyan);color:var(--black);height:34px;display:flex;align-items:center}
+.menubar .wrap{display:flex;align-items:center;gap:44px;width:100%}
+.menubar a{padding:0 6px;line-height:34px}
+.menubar a:hover,.menubar a:focus-visible{background:var(--black);color:var(--cyan);outline:none}
+.menubar .brand{font-weight:700}
+.menubar .ver{margin-left:auto}
+
+/* MC frame: box with title sitting in the border */
+.frame{position:relative;border:1.5px solid var(--grey);margin-top:34px}
+.frame>.title{position:absolute;top:-13px;left:18px;background:var(--blue);color:var(--white);font-weight:700;padding:0 6px;line-height:24px;white-space:nowrap;max-width:calc(100% - 60px);overflow:hidden;text-overflow:ellipsis}
+.frame.active>.title{background:var(--cyan);color:var(--black)}
+.frame>.caret{position:absolute;top:-13px;right:14px;background:var(--blue);padding:0 4px;line-height:24px}
+.colhead{color:var(--olive)}
+
+/* hero */
+.hero{padding:34px 48px 0}
+h1{font-weight:800;font-size:clamp(30px,8vw,112px);line-height:1.1;letter-spacing:-.01em;color:var(--white);margin:10px 0 34px}
+h1 .l2{display:inline-block;color:var(--yellow);white-space:nowrap;font-size:.6em;margin-top:.25em;min-height:1.1em}
+.cur{display:inline-block;width:.5em;height:.95em;background:var(--cyan);vertical-align:-.12em;margin-left:.1em;animation:blink 1.06s steps(1) infinite}
+@keyframes blink{50%{opacity:0}}
+.tags{display:flex;flex-wrap:wrap;gap:8px 18px;color:var(--white)}
+.tags span::before{content:"* ";color:var(--yellow)}
+.hero-row{display:grid;grid-template-columns:1.25fr 1fr;gap:48px;align-items:end;padding-bottom:30px}
+.lede{max-width:700px;font-size:17px}
+.lede b{color:var(--white);font-weight:500}
+.btns{display:flex;flex-wrap:wrap;gap:20px;margin-top:28px}
+.btn{display:inline-block;padding:8px 20px;font-weight:700;font-size:18px;color:var(--white);border:1.5px solid var(--grey)}
+.btn.primary{background:var(--cyan);color:var(--black);border-color:var(--cyan)}
+.btn:hover,.btn:focus-visible{background:var(--black);color:var(--cyan);border-color:var(--black);outline:none}
+.shell{background:var(--black);padding:14px 20px;font-size:16px}
+.shell .top{display:flex;justify-content:space-between;color:var(--grey);font-size:13px;margin-bottom:6px}
+.shell .ln{color:var(--white);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.shell .cm{color:var(--olive);font-size:13px}
+.copy{all:unset;cursor:pointer;color:var(--black);background:var(--cyan);padding:0 8px;font-size:13px;line-height:20px}
+.copy:hover{background:var(--white)}
+.copy.ok{background:var(--green)}
+.minist{display:flex;justify-content:space-between;border-top:1.5px solid var(--grey);margin:0 -48px;padding:8px 24px}
+
+/* replica screen */
+.screen-wrap{padding:56px 0 0}
+.screen{pointer-events:none;user-select:none;-webkit-user-select:none;background:var(--black);padding:10px;max-width:1268px;margin:0 auto;box-shadow:18px 18px 0 rgba(0,0,0,.55);font-size:14px;line-height:22px;outline:none;position:relative}
+.s-menu{background:var(--cyan);color:var(--black);display:flex;gap:34px;padding:1px 14px;white-space:nowrap;overflow:hidden}
+.s-menu .v{margin-left:auto}
+.s-body{background:var(--blue);display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:12px 8px 8px}
+.pane{border:1px solid var(--grey);position:relative;min-width:0}
+.pane .pt{position:absolute;top:-11px;left:10px;background:var(--blue);color:var(--white);padding:0 3px;white-space:nowrap;max-width:calc(100% - 30px);overflow:hidden;text-overflow:ellipsis}
+.pane.active .pt{background:var(--cyan);color:var(--black)}
+.row{display:grid;grid-template-columns:minmax(0,1fr) 90px 132px;white-space:nowrap}
+.row>*{overflow:hidden;text-overflow:ellipsis;padding:0 8px}
+.cols{position:relative}
+.cols>.vl{position:absolute;top:0;bottom:0;width:1px;background:var(--grey);z-index:2;pointer-events:none}
+.pane .vl.v1{right:222px}.pane .vl.v2{right:132px}
+.row>:nth-child(2){text-align:right}
+.hdr{padding-top:4px}
+.pane .hdr{padding-top:14px}
+.hdr>*{color:var(--olive)}
+.hdr>:nth-child(2){text-align:center}
+.list{height:342px;overflow:hidden}
+.list .row>*{color:var(--grey)}
+.list .row.dir>:first-child{color:var(--white)}
+.list .row.big>*{color:var(--mag)}
+.list .row.mk>*{color:var(--yellow)}
+.pane.active .row.sel{background:var(--cyan)}
+.pane.active .row.sel>*{color:var(--black)}
+.pstat{border-top:1px solid var(--grey);display:flex;justify-content:space-between;padding:4px 8px;white-space:nowrap;overflow:hidden;gap:12px}
+.pstat span{overflow:hidden;text-overflow:ellipsis}
+.s-cmd{color:var(--grey);padding:2px 4px;white-space:nowrap;overflow:hidden}
+.fk{display:grid;grid-template-columns:repeat(10,1fr)}
+.fk>span{display:flex;white-space:nowrap;overflow:hidden;color:var(--white);background:var(--black)}
+.fk>span>span{flex:1;background:var(--cyan);color:var(--black);overflow:hidden}
+.fk>span.hit>span{background:var(--white)}
+.dialog-pop{position:absolute;left:50%;top:48%;transform:translate(-50%,-50%);background:var(--dlg);color:var(--black);padding:6px;box-shadow:10px 10px 0 rgba(0,0,0,.8);display:none;min-width:min(440px,90%);z-index:3}
+.dialog-pop.on{display:block}
+.dialog-pop div{border:1px solid var(--black);padding:18px 22px 14px;text-align:center;position:relative}
+.dialog-pop b{position:absolute;top:-12px;left:50%;transform:translateX(-50%);background:var(--dlg);padding:0 6px}
+.dialog-pop p{margin:4px 0 12px}
+.dialog-pop i{font-style:normal;background:var(--cyan);padding:0 8px}
+.hint{text-align:center;margin-top:28px;color:var(--white);font-size:14px}
+kbd{font-family:var(--mono);background:var(--cyan);color:var(--black);padding:0 6px}
+
+/* stats */
+.stats{display:grid;grid-template-columns:repeat(4,1fr);padding:18px 0 14px}
+.stat{padding:4px 28px;border-left:1px solid var(--grey)}
+.stat:first-child{border-left:0}
+.stat strong{display:block;font-size:44px;line-height:1.25;color:var(--yellow);font-weight:700}
+.stat:nth-child(even) strong{color:var(--white)}
+.stat small{font-size:14px;display:block}
+
+/* section heads */
+section{padding-top:110px}
+h2{font-size:clamp(34px,4.3vw,58px);font-weight:700;line-height:1.1;color:var(--white)}
+.sub{color:var(--cyan);margin:10px 0 22px}
+
+/* speed */
+.speed{display:grid;grid-template-columns:1fr 1.15fr;gap:40px;align-items:start}
+.speed h2 .y{color:var(--yellow)}
+.speed .lede{margin:22px 0}
+.speed ul{list-style:none}
+.speed li{padding:6px 0 6px 26px;position:relative}
+.speed li::before{content:"»";position:absolute;left:0;color:var(--yellow)}
+.bench{padding:26px 26px 18px}
+.bench .b{margin-bottom:20px}
+.bench .lbl{display:flex;justify-content:space-between;gap:16px;color:var(--white);flex-wrap:wrap}
+.bench .lbl em{font-style:normal;color:var(--yellow)}
+.bar{height:18px;background:rgba(0,0,0,.35);margin-top:6px;position:relative}
+.bar i{position:absolute;inset:0 auto 0 0;background:var(--grey);width:0;transition:width 1.2s cubic-bezier(.2,.8,.2,1)}
+.bar i.after{background:var(--cyan)}
+.bar+.bar{margin-top:4px}
+.bench .foot{color:var(--grey);font-size:13px;border-top:1px solid var(--grey);padding-top:10px;display:flex;gap:18px;flex-wrap:wrap}
+.bench .foot span::before{content:"■ ";color:var(--grey)}
+.bench .foot span.a::before{color:var(--cyan)}
+.latency{margin-top:28px;background:var(--black);padding:14px 18px;font-size:14px}
+.latency b{color:var(--yellow);font-weight:500}
+
+/* features listing + quick view */
+.feat{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.feat .frame{margin-top:14px}
+.flist .row{grid-template-columns:minmax(0,1fr) 150px;line-height:30px;font-size:16px}
+.flist .row>:nth-child(2){text-align:left}
+.flist .hdr{line-height:34px;border-bottom:1.5px solid var(--grey)}
+.flist{display:flex;flex-direction:column}
+.flist .cols{flex:1}
+.flist .vl{right:150px;width:1.5px!important}
+.flist .items{padding:6px 0}
+.flist .items .row{cursor:pointer}
+.flist .items .row>*{color:var(--grey)}
+.flist .items .row.dir>:first-child{color:var(--white)}
+.flist .items .row.sel{background:var(--cyan)}
+.flist .items .row.sel>*{color:var(--black)}
+.flist .pstat{border-top-width:1.5px;padding:8px 18px;font-size:15px}
+.flist:focus-visible{outline:2px solid var(--yellow);outline-offset:4px}
+.qv{padding:34px 36px 30px;min-height:100%}
+.qv h3{font-size:34px;color:var(--yellow);line-height:1.2;margin-bottom:18px}
+.qv p{font-size:17px;min-height:7.5em}
+.qv .cmdl{margin-top:24px;color:var(--white)}
+.qv .cmt{color:var(--olive)}
+
+
+/* power-tool dialogs, colours sampled from the real app */
+.tools{display:grid;grid-template-columns:1fr 1fr;gap:34px}
+.tools .wide{grid-column:1/-1}
+.tools{row-gap:48px}
+.td{background:#E5E5E5;color:#000;padding:10px;box-shadow:16px 16px 0 rgba(0,0,0,.55);font-size:15px;line-height:26px;pointer-events:none;user-select:none;-webkit-user-select:none;min-width:0}
+.td>.in{border:1px solid #000;padding:24px 22px 16px;position:relative;height:100%}
+.td .tt{position:absolute;top:-14px;left:14px;background:#E5E5E5;color:#0000AB;font-weight:700;padding:0 6px;white-space:nowrap}
+.td .inp{background:var(--cyan);padding:0 10px;min-height:26px;white-space:nowrap;overflow:hidden;margin:2px 0 8px}
+.td .inp .c{display:inline-block;width:.6em;height:1.05em;background:#fff;vertical-align:-3px;animation:blink 1.06s steps(1) infinite}
+.td .hl{color:#727272;font-size:14px;line-height:22px}
+.td .k{color:#8C1A11}
+.td .btns2{display:flex;justify-content:center;gap:40px;margin-top:14px;white-space:nowrap}
+.td .row3{display:flex;flex-wrap:wrap;gap:0 30px}
+.td .sp{height:12px}
+.mr{display:grid;grid-template-columns:minmax(0,1fr) 330px;gap:0}
+.mr .side{border-left:1px solid #000;padding-left:18px;margin-left:18px;font-size:14px;line-height:24px;white-space:nowrap;overflow:hidden}
+.mr .side b{color:#0000AB}
+.mr .opts{white-space:nowrap;overflow:hidden}
+.mr .opts .inp{display:inline-block;margin:0 14px 0 0;min-width:60px;vertical-align:top}
+.td table{width:100%;border-collapse:collapse;margin-top:14px;font-size:15px;table-layout:fixed}
+.td th{color:#0000AB;text-align:left;padding:4px 20px 8px;border-bottom:1px solid #000}
+.td td{padding:1px 20px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.td th.s,.td td.s{text-align:right;width:120px}
+.td td.n{color:#000}
+.td td.n.chg{color:#0000AB;font-weight:700}
+.td tbody tr:first-child td{padding-top:10px}
+.td .foot{border-top:1px solid #000;margin:10px -22px 0;padding-top:10px}
+@media (max-width:1000px){.tools{grid-template-columns:1fr}.mr{grid-template-columns:1fr}.mr .side{display:none}}
+@media (max-width:640px){.td th.s,.td td.s{display:none}.mr th,.td td{padding-left:6px;padding-right:6px}.mr .opts{white-space:normal}.td>.in{padding:22px 12px 14px}}
+
+.hot .flt{display:flex;gap:14px;align-items:center;white-space:nowrap}
+.hot .flt .inp{flex:1;margin:0}
+.hot .sep{border-top:1px solid #000;margin:10px -12px}
+.hot .hl-list{height:calc(26px * 9);overflow:hidden}
+.hot .hr{display:grid;grid-template-columns:44px minmax(0,1fr) 60px;margin:0 -12px;padding:0 12px;white-space:nowrap}
+.hot .hr span{overflow:hidden;text-overflow:ellipsis}
+.hot .hr .sc{text-align:right;color:#727272}
+.hot .hr.sel{background:var(--cyan)}
+.hot .hr.sel .sc{color:#000}
+.hot .hint2{color:#727272;margin-top:4px;white-space:nowrap;overflow:hidden}
+.tool{min-width:0;display:flex;flex-direction:column}
+.tool .td{flex:1}
+.tool .cmt2{color:var(--cyan);margin-bottom:14px}
+.tool .cmt2 b{color:var(--yellow);font-weight:500}
+/* safety dialog */
+.dlg-wrap{display:flex;justify-content:center;padding-top:30px}
+.dlg{background:var(--dlg);color:var(--black);padding:12px;max-width:940px;width:100%;box-shadow:18px 18px 0 rgba(0,0,0,.6)}
+.dlg>.in{border:1.5px solid var(--black);padding:34px 40px 26px;position:relative}
+.dlg .dt{position:absolute;top:-14px;left:50%;transform:translateX(-50%);background:var(--dlg);padding:0 8px;font-weight:700;font-size:18px;white-space:nowrap}
+.dlg p{margin-bottom:22px}
+.dlg p code{color:var(--navy);font-weight:700}
+.checks{list-style:none}
+.checks li{display:grid;grid-template-columns:44px 1fr 1.15fr;gap:12px;padding:5px 0}
+.checks .box{font-weight:700}
+.checks small{color:var(--navy);font-size:15px}
+.dlg .acts{display:flex;justify-content:center;gap:30px;margin-top:24px}
+.dlg .acts a{padding:2px 10px;font-weight:700}
+.dlg .acts a.def{background:var(--cyan)}
+.dlg .acts a:hover{background:var(--black);color:var(--dlg)}
+
+/* install */
+.radios{display:flex;flex-wrap:wrap;gap:10px 40px;color:var(--yellow);margin:18px 0 20px;font-size:17px}
+.radios button{all:unset;cursor:pointer;padding:0 4px}
+.radios button:hover,.radios button:focus-visible{background:var(--black);color:var(--cyan)}
+.term{background:var(--black);display:flex;gap:18px;align-items:flex-start;padding:16px 22px}
+.term pre{flex:1;font-family:var(--mono);font-size:17px;color:var(--white);overflow-x:auto;line-height:1.7}
+.term .copy{margin-top:5px}
+.note{margin-top:14px}
+
+/* F-key footer */
+.fbar{position:fixed;left:0;right:0;bottom:0;z-index:40;background:var(--black);display:grid;grid-template-columns:repeat(10,1fr);height:30px;line-height:30px;font-size:15px}
+.fbar a{display:flex;white-space:nowrap;overflow:hidden;color:var(--white);background:var(--black)}
+.fbar a span{flex:1;background:var(--cyan);color:var(--black);overflow:hidden}
+.fbar a:hover span,.fbar a:focus-visible span{background:var(--white)}
+.fbar a:focus-visible{outline:none}
+footer{margin-top:120px;border-top:1.5px solid var(--grey);padding:14px 0 18px}
+footer .wrap{display:flex;justify-content:space-between;flex-wrap:wrap;gap:12px;font-size:14px}
+
+.reveal{opacity:0;transform:translateY(14px);transition:opacity .6s,transform .6s}
+.reveal.in{opacity:1;transform:none}
+
+@media (max-width:1000px){
+  .hero{padding:30px 22px 0}
+  .minist{margin:0 -22px}
+  .hero-row,.speed,.feat{grid-template-columns:1fr}
+  .s-body{grid-template-columns:1fr}
+  .s-body .pane+.pane{display:none}
+  .stats{grid-template-columns:1fr 1fr}
+  .stat:nth-child(3){border-left:0}
+  .stat:nth-child(n+3){border-top:1px solid var(--grey);padding-top:14px;margin-top:10px}
+  .fk{grid-template-columns:repeat(5,1fr)}
+  .menubar .wrap{gap:18px}
+  .fbar{grid-template-columns:repeat(5,1fr)}
+  .fbar a:nth-child(n+6){display:none}
+}
+@media (max-width:640px){
+  h1 .l2{font-size:.52em}
+  .wrap{padding:0 16px}
+  .menubar a:not(.brand):not(.m-keep){display:none}
+  .row{grid-template-columns:minmax(0,1fr) 78px}
+  .row>:nth-child(3){display:none}
+  .flist .row{grid-template-columns:minmax(0,1fr) 96px}
+  .flist .vl{right:96px}
+  .pane .vl.v1{right:78px}.pane .vl.v2{display:none}
+  .flist .row>:nth-child(2){display:block}
+  .s-menu{gap:16px}
+  .s-menu .v{display:none}
+  .stat{padding:4px 14px}
+  .stat strong{font-size:32px}
+  .qv{padding:28px 20px}
+  .dlg>.in{padding:30px 18px 22px}
+  .checks li{grid-template-columns:40px 1fr}
+  .checks small{display:none}
+  .bench{padding:22px 16px 14px}
+}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}.reveal{opacity:1;transform:none}}
+</style>
+</head>
+<body>
+
+<nav class="menubar" aria-label="Main">
+  <div class="wrap">
+    <a class="brand" href="#top">el-commander</a>
+    <a href="#speed">Speed</a>
+    <a href="#features">Features</a>
+    <a href="#tools">Tools</a>
+    <a href="#safety">Safety</a>
+    <a class="m-keep" href="#install">Install</a>
+    <a class="ver" href="https://github.com/elkaszcz/el-commander-releases/releases/latest">v2.0.2</a>
+  </div>
+</nav>
+
+<main id="top">
+  <div class="wrap">
+    <div class="frame active hero-frame">
+      <span class="title"> ~/el-commander </span><span class="caret">^</span>
+      <div class="hero">
+        <div class="colhead">Name▲</div>
+        <h1>Two panes.<br><span class="l2"><span id="type">Freaky quick.</span><span class="cur"></span></span></h1>
+        <div class="hero-row">
+          <div>
+            <div class="tags"><span>freaky quick</span><span>Rust</span><span>SSH/SFTP panels</span><span>macOS · Linux · Windows</span></div>
+            <p class="lede" style="margin-top:18px">A fast, safe dual-pane terminal file manager. The soul of Midnight Commander — rebuilt in Rust with <b>direct syscalls</b>, <b>atomic writes</b> and a <b>sandboxed filesystem</b>. It starts instantly and never makes you wait for a keypress.</p>
+            <div class="btns">
+              <a class="btn primary" href="#install">[ Install cm ]</a>
+              <a class="btn" href="https://github.com/elkaszcz/el-commander-releases/releases/latest">[ Download ]</a>
+            </div>
+          </div>
+          <div class="shell">
+            <div class="top"><span>~/Downloads</span><button class="copy" data-copy="curl -fsSL https://raw.githubusercontent.com/elkaszcz/el-commander-releases/main/install.sh | sh">copy</button></div>
+            <div class="ln">$ curl -fsSL …/install.sh | sh</div>
+            <div class="cm"># installs `cm` to ~/.local/bin</div>
+          </div>
+        </div>
+        <div class="minist"><span>UP-DIR</span><span>MIT · made with Rust</span></div>
+      </div>
+    </div>
+
+    <div class="screen-wrap" id="demo">
+      <div class="screen" id="screen" role="img" aria-label="Animated preview of el-commander: two file panels, one local and one over SFTP, with files being selected and copied.">
+        <div class="s-menu"><span>Left</span><span>File</span><span>Command</span><span>Options</span><span>Right</span><span class="v">v2.0.2</span></div>
+        <div class="s-body">
+          <div class="pane active" data-p="0"><span class="pt">~/projects/website</span>
+            <div class="cols"><i class="vl v1"></i><i class="vl v2"></i>
+            <div class="row hdr"><span>Name▲</span><span>Size</span><span>Modification</span></div>
+            <div class="list"></div></div><div class="pstat"><span class="a"></span><span class="b"></span></div></div>
+          <div class="pane" data-p="1"><span class="pt">sftp://deploy@prod:/var/www</span>
+            <div class="cols"><i class="vl v1"></i><i class="vl v2"></i>
+            <div class="row hdr"><span>Name▲</span><span>Size</span><span>Modification</span></div>
+            <div class="list"></div></div><div class="pstat"><span class="a"></span><span class="b"></span></div></div>
+        </div>
+        <div class="s-cmd" id="cwd">~/projects/website</div>
+        <div class="fk" id="fk"></div>
+        <div class="dialog-pop" id="pop"><div><b id="popt"></b><p id="popm"></p><i>[&lt; OK &gt;]</i></div></div>
+      </div>
+      <p class="hint">Animated preview. <a href="#install" style="color:var(--yellow);text-decoration:underline">Install cm</a> to try the real thing: <kbd>Tab</kbd> switch panel · <kbd>Ctrl+T</kbd> mark · <kbd>Esc+5</kbd> copy</p>
+    </div>
+
+    <div class="frame" style="margin-top:70px">
+      <span class="title"> cm --stats </span>
+      <div class="stats">
+        <div class="stat reveal"><strong>0</strong><small>shell processes spawned for copy, move, delete</small></div>
+        <div class="stat reveal"><strong>~3 ns</strong><small>per frame when idle: nothing changed, nothing redrawn</small></div>
+        <div class="stat reveal"><strong>3</strong><small>platforms: macOS · Linux · Windows</small></div>
+        <div class="stat reveal"><strong>100%</strong><small>Rust, cap-std sandboxed I/O</small></div>
+      </div>
+    </div>
+  </div>
+
+  <section id="speed">
+    <div class="wrap speed">
+      <div class="reveal">
+        <h2>Blazing fast.<br><span class="y">Snappy to the bone.</span></h2>
+        <p class="lede">A single native binary: no runtime, no interpreter, no warm-up. <code>cm</code> is on screen before your finger leaves <kbd>Enter</kbd>, and every keypress after that lands instantly.</p>
+        <ul>
+          <li><b style="color:var(--white)">Never blocks the UI.</b> Copy, move, delete and directory sizes run on background threads with live progress, and you can cancel any of them mid-flight.</li>
+          <li><b style="color:var(--white)">Redraws only on change.</b> An idle-redraw flag skips frame building entirely when nothing has changed.</li>
+          <li><b style="color:var(--white)">Huge files, no limits.</b> The viewer and editor stream very large files, and hex view opens binaries.</li>
+          <li><b style="color:var(--white)">Slow links stay responsive.</b> Directory reads get a bounded grace window, so an SFTP hiccup never freezes the screen.</li>
+        </ul>
+      </div>
+      <div class="frame bench-frame reveal">
+        <span class="title"> perf review · steady-state frame cost </span>
+        <div class="bench" id="bench">
+          <div class="b"><div class="lbl"><span>viewer, Markdown @ 1 MB</span><span>18.5 ms → <em>3 ns</em></span></div><div class="bar"><i data-w="100"></i></div><div class="bar"><i class="after" data-w="0.6"></i></div></div>
+          <div class="b"><div class="lbl"><span>editor, syntax highlight</span><span>3.31 ms → <em>1 ns</em></span></div><div class="bar"><i data-w="17.9"></i></div><div class="bar"><i class="after" data-w="0.4"></i></div></div>
+          <div class="b"><div class="lbl"><span>viewer, code mode</span><span>2.85 ms → <em>3 ns</em></span></div><div class="bar"><i data-w="15.4"></i></div><div class="bar"><i class="after" data-w="0.6"></i></div></div>
+          <div class="b"><div class="lbl"><span>scroll one line, 1 MB deep</span><span>18.5 ms → <em>365 µs</em></span></div><div class="bar"><i data-w="100"></i></div><div class="bar"><i class="after" data-w="2"></i></div></div>
+          <div class="foot"><span>before</span><span class="a">after</span><span>from the 2026-07-25 performance review</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="features">
+    <div class="wrap">
+      <h2>Everything in its pane.</h2>
+      <p class="sub">// features, browsable like a directory. Hover a row or use ↑ ↓.</p>
+      <div class="feat">
+        <div class="frame active flist" id="flist" tabindex="0">
+          <span class="title"> ~/features </span>
+          <div class="cols"><i class="vl"></i>
+          <div class="row hdr"><span class="colhead">Name▲</span><span class="colhead">Key</span></div>
+          <div class="items" id="fitems"></div></div>
+          <div class="pstat"><span id="fname"></span><span id="fcount"></span></div>
+        </div>
+        <div class="frame" style="margin-top:14px">
+          <span class="title" id="qvt"> Quick view </span>
+          <div class="qv"><h3 id="qvh"></h3><p id="qvp"></p><div class="cmdl" id="qvc"></div><div class="cmt" id="qvm"></div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="tools">
+    <div class="wrap">
+      <h2>Power tools.</h2>
+      <p class="sub">// jump, select, find and rename in bulk. Previews of the real dialogs.</p>
+      <div class="tools">
+        <div class="tool wide"><p class="cmt2">// <b>Esc+/</b> to jump to any folder you have bookmarked or visited</p>
+        <div class="td hot" role="img" aria-label="Animated preview of the Directory hotlist: typing a fuzzy filter narrows bookmarks and visited folders, ranked by a frecency score.">
+          <div class="in">
+            <span class="tt">Directory hotlist</span>
+            <div class="flt"><span>Filter:</span><div class="inp"><span id="hotQ"></span><span class="c"></span></div></div>
+            <div class="sep"></div>
+            <div class="hl-list" id="hotRows"></div>
+            <div class="sep"></div>
+            <div class="btns2" style="margin-top:4px"><span>[ <span class="k">A</span>dd to hotlist ]</span><span>[ <span class="k">D</span>elete ]</span></div>
+            <div class="hint2">Enter: jump &nbsp;&nbsp; Esc: back to list &nbsp;&nbsp; (Esc again closes) &nbsp;&nbsp; * = learned from your history, score = frecency</div>
+          </div>
+        </div>
+
+        </div>
+        <div class="tool wide"><p class="cmt2">// <b>Esc+r</b> to rename many files at once with masks</p>
+        <div class="td" role="img" aria-label="Animated preview of the Multi-Rename Tool: a mask Tatry_[YMD]_[C] renames six photos, with a live preview of the new names.">
+          <div class="in">
+            <span class="tt">Multi-Rename Tool — 6 files</span>
+            <div class="mr">
+              <div>
+                <div>Rename mask (name):</div>
+                <div class="inp"><span id="mrMask"></span><span class="c"></span></div>
+                <div>Extension mask:</div>
+                <div class="inp">[E]</div>
+                <div class="opts">Counter&nbsp; Start:<span class="inp">1</span>Step:<span class="inp">1</span>Digits:<span class="inp">3</span></div>
+                <div class="opts">Name case: [Unchanged]&nbsp;&nbsp; Ext case: [lower]&nbsp;&nbsp; Date tokens from: [EXIF taken]</div>
+                <div class="opts">Preset: [(none)]&nbsp;&nbsp;&nbsp; [ Sa<span class="k">v</span>e ]&nbsp; [ Delete ]</div>
+              </div>
+              <div class="side">
+                <b>Mask tokens:</b><br>
+                [N] name&nbsp;&nbsp;&nbsp;&nbsp; [N1-3] range<br>
+                [E] ext&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; [E1-3] range<br>
+                [C] counter (Start/Step/Digits)<br>
+                [Y][M][D] / [YMD]&nbsp;&nbsp; date<br>
+                [h][m][s] / [hms]&nbsp;&nbsp; time<br>
+                [EXIF:model] [EXIF:iso]<br>
+                [EXIF:fnumber] [EXIF:w] [EXIF:h]
+              </div>
+            </div>
+            <table>
+              <thead><tr><th>Old name</th><th class="s">Size</th><th>New name</th></tr></thead>
+              <tbody id="mrRows"></tbody>
+            </table>
+            <div class="foot"><div class="btns2"><span>[ <span class="k">S</span>tart ]</span><span>[ <span class="k">C</span>lose ]</span></div></div>
+          </div>
+        </div>
+
+        </div>
+        <div class="tool"><p class="cmt2">// <b>Shift++</b> to select files by pattern and query</p>
+        <div class="td" role="img" aria-label="Preview of the Select dialog with the pattern *.jpg; *.pdf and the query size>10m AND date:this_week.">
+          <div class="in">
+            <span class="tt">Select</span>
+            <div>Enter pattern</div>
+            <div>Example: *.jpg; *.pdf</div>
+            <div class="inp">*.jpg; *.pdf</div>
+            <div>Query (optional)</div>
+            <div class="inp"><span id="selQ"></span><span class="c"></span></div>
+            <div class="hl">name: ext: size: date: type: perm: exif:date &nbsp;·&nbsp; : = != &gt; &lt; &gt;= &lt;= &nbsp;·&nbsp; AND OR NOT / !</div>
+            <div class="hl">date terms: today, yesterday, Ndays, Nmonths, this_week, last_week, this_month, last_month</div>
+            <div class="sp"></div>
+            <div>[ ] Ca<span class="k">s</span>e sensitive</div>
+            <div class="sp"></div>
+            <div>Preset: [photos this week]</div>
+            <div class="btns2"><span>[ <span class="k">O</span>K ]</span><span>[ <span class="k">C</span>ancel ]</span></div>
+          </div>
+        </div>
+
+        </div>
+        <div class="tool"><p class="cmt2">// <b>Alt+7</b> to find files and folders, even inside them</p>
+        <div class="td" role="img" aria-label="Preview of the Find files and folders dialog with search pattern, containing text, query and search options.">
+          <div class="in">
+            <span class="tt">Find files and folders</span>
+            <div>Search pattern (e.g. *.jpg; *.pdf):</div>
+            <div class="inp">invoice*.pdf</div>
+            <div>Containing text:</div>
+            <div class="inp">VAT</div>
+            <div>Query:</div>
+            <div class="inp">date:last_month AND size&lt;2m</div>
+            <div class="row3"><span>[x] Search for <span class="k">f</span>iles</span><span>[ ] Case <span class="k">s</span>ensitive</span></div>
+            <div class="row3"><span>[x] Search for fol<span class="k">d</span>ers</span><span>[x] Find <span class="k">r</span>ecursively</span></div>
+            <div class="row3"><span>[x] Honour .<span class="k">g</span>itignore</span><span>[ ] <span class="k">I</span>gnore hidden</span></div>
+            <div class="sp"></div>
+            <div>[x] Search only in folders I <span class="k">v</span>isited</div>
+            <div>[ ] Search in my <span class="k">h</span>ome folder</div>
+            <div class="btns2"><span>[ <span class="k">O</span>K ]</span><span>[ <span class="k">C</span>ancel ]</span></div>
+          </div>
+        </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="safety">
+    <div class="wrap">
+      <h2>Paranoid by design.</h2>
+      <p class="sub">// safety guarantees. Every box is ticked.</p>
+      <div class="dlg-wrap reveal">
+        <div class="dlg"><div class="in">
+          <span class="dt"> Safety check </span>
+          <p>No <code>cp</code>, <code>rm</code> or <code>mv</code> is ever spawned. Every file operation is native Rust on top of capability-based <code>cap-std</code>, so there is no shell to inject into and every error is handled by the app.</p>
+          <ul class="checks">
+            <li><span class="box">[x]</span><span>direct syscalls</span><small>no shell, no injection</small></li>
+            <li><span class="box">[x]</span><span>atomic writes</span><small>tempfile → fsync → rename</small></li>
+            <li><span class="box">[x]</span><span>zip-slip &amp; tar-slip</span><small>traversal entries rejected</small></li>
+            <li><span class="box">[x]</span><span>SSH host keys</span><small>changed key = MITM refused</small></li>
+            <li><span class="box">[x]</span><span>secret hygiene</span><small>Zeroizing, wiped on drop</small></li>
+            <li><span class="box">[x]</span><span>preview helper</span><small>SHA-256 verified before exec</small></li>
+            <li><span class="box">[x]</span><span>URL handler</span><small>http · https · mailto only</small></li>
+            <li><span class="box">[x]</span><span>signed releases</span><small>Minisign-verified on install &amp; update</small></li>
+          </ul>
+          <div class="acts"><a class="def" href="#install">[&lt; OK &gt;]</a><a href="https://github.com/elkaszcz/el-commander-releases#verifying-a-download">[ Details ]</a></div>
+        </div></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="install">
+    <div class="wrap">
+      <h2>One line. Then type <span style="color:var(--yellow)">cm</span>.</h2>
+      <div class="radios" role="radiogroup" id="radios">
+        <button role="radio" data-t="0">(•) macOS / Linux</button>
+        <button role="radio" data-t="1">( ) Windows</button>
+        <button role="radio" data-t="2">( ) Manual download</button>
+      </div>
+      <div class="term"><pre id="icode"></pre><button class="copy" id="icopy">copy</button></div>
+      <p class="note" id="inote"></p>
+    </div>
+  </section>
+</main>
+
+<footer><div class="wrap"><span>el-commander · MIT license · inspired by Midnight Commander</span><span>v2.0.2</span></div></footer>
+
+<nav class="fbar" aria-label="Function keys">
+  <a href="https://github.com/elkaszcz/el-commander-releases#readme">1<span>Docs</span></a>
+  <a href="https://github.com/elkaszcz/el-commander-releases">2<span>GitHub</span></a>
+  <a href="#speed">3<span>Speed</span></a>
+  <a href="https://github.com/elkaszcz/el-commander-releases/releases/latest">4<span>Download</span></a>
+  <a href="#install">5<span>Install</span></a>
+  <a href="#features">6<span>Features</span></a>
+  <a href="#safety">7<span>Safety</span></a>
+  <a href="https://github.com/elkaszcz/el-commander-releases/releases">8<span>Releases</span></a>
+  <a href="https://github.com/elkaszcz/el-commander-releases/blob/main/LICENSE">9<span>License</span></a>
+  <a href="#top">10<span>Top</span></a>
+</nav>
+
+<script>
+(() => {
+  const $ = (s, r = document) => r.querySelector(s);
+  const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+  const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;');
+
+  /* ---------- replica screen ---------- */
+  const panes = [
+    [['/..','UP-DIR','','dir'],['/assets','<DIR>','Sep 23 13:54','dir'],['/drafts','<DIR>','Sep 21 09:12','dir'],['/exports','<DIR>','Sep 19 17:40','dir'],['/photos','<DIR>','Aug 30 11:05','dir'],['/scripts','<DIR>','Sep 18 09:52','dir'],
+     ['.env.example','412','Jul 02 10:18'],['Makefile','1.4KB','Sep 11 16:22'],['README.md','6.2KB','Sep 23 13:54'],['budget-2026.xlsx','48.3KB','Sep 15 08:47'],['deploy.sh','2.1KB','Sep 16 19:49'],
+     ['index.html','3.1KB','Sep 22 21:14'],['notes.md','9.5KB','Sep 04 09:28'],['report-q3.pdf','1.8MB','Sep 24 07:31'],['site-backup.tar.gz','3.8GB','Sep 20 03:00','big'],['styles.css','14.6KB','Sep 22 21:10']],
+    [['/..','UP-DIR','','dir'],['/assets','<DIR>','Sep 22 21:14','dir'],['/releases','<DIR>','Sep 24 07:58','dir'],['backup-2026-09.tar.gz','3.8GB','Sep 20 03:00','big'],
+     ['index.html','3.1KB','Sep 22 21:14'],['nginx.conf','1.8KB','Aug 30 12:44'],['robots.txt','24','Jun 11 10:05'],['site.webmanifest','412','Jun 11 10:05']]
+  ];
+  const st = { active: 0, sel: [0, 0], mk: [new Set(), new Set()] };
+  const paneEls = $$('.pane');
+  const bytes = s => { const m = /^([\d.]+)(KB|MB|GB)?$/.exec(s); return m ? parseFloat(m[1]) * ({KB:1024, MB:1048576, GB:1073741824}[m[2]] || 1) : 0; };
+  const human = n => n >= 1073741824 ? (n/1073741824).toFixed(1)+'GB' : n >= 1048576 ? (n/1048576).toFixed(1)+'MB' : n >= 1024 ? (n/1024).toFixed(1)+'KB' : n+'';
+  function render() {
+    paneEls.forEach((el, p) => {
+      el.classList.toggle('active', p === st.active);
+      $('.list', el).innerHTML = panes[p].map((r, i) =>
+        `<div class="row ${r[3]||''} ${i===st.sel[p]?'sel':''} ${st.mk[p].has(i)?'mk':''}" data-i="${i}"><span>${esc(r[0])}</span><span>${esc(r[1])}</span><span>${r[2]}</span></div>`).join('');
+      const cur = panes[p][st.sel[p]], m = [...st.mk[p]];
+      $('.pstat .a', el).textContent = m.length ? `${human(m.reduce((a,i)=>a+bytes(panes[p][i][1]),0))} in ${m.length} file${m.length>1?'s':''}` : (cur[0] === '/..' ? 'UP-DIR' : cur[0].replace(/^\//,''));
+      $('.pstat .b', el).textContent = m.length ? '' : (cur[1] === 'UP-DIR' ? '' : cur[1]);
+    });
+    $('#cwd').textContent = st.active ? 'deploy@prod:/var/www' : '~/projects/website';
+  }
+  const fks = [['1','Help'],['2','Plan'],['3','View'],['4','Edit'],['5','Copy'],['6','RenMov'],['7','Mkdir'],['8','Del'],['9','PullDn'],['10','Quit']];
+  $('#fk').innerHTML = fks.map(([n,l]) => `<span data-f="${n}">${n}<span>${l}</span></span>`).join('');
+  const pop = $('#pop'); let pt;
+  function dialog(t, m) { $('#popt').textContent = ` ${t} `; $('#popm').textContent = m; pop.classList.add('on'); clearTimeout(pt); pt = setTimeout(() => pop.classList.remove('on'), 1700); }
+  function act(f) {
+    const p = st.active, o = 1 - p;
+    const items = st.mk[p].size ? [...st.mk[p]].map(i => panes[p][i][0]) : [panes[p][st.sel[p]][0]];
+    const what = items.length > 1 ? `${items.length} files` : `"${items[0].replace(/^\//,'')}"`;
+    const to = o ? 'sftp://deploy@prod:/var/www' : '~/projects/website';
+    const b = $(`#fk [data-f="${f}"]`); b && (b.classList.add('hit'), setTimeout(() => b.classList.remove('hit'), 200));
+    ({
+      '1': () => dialog('Help', 'Every shortcut, one keypress away'),
+      '2': () => dialog('Plan', 'Queue operations, run them together'),
+      '3': () => dialog('View', `${what} · text · hex · wrap`),
+      '4': () => dialog('Edit', `${what} · undo · search · go-to-line`),
+      '5': () => dialog('Copy', `${what} → ${to} · atomic ✓`),
+      '6': () => dialog('Rename/Move', `${what} → ${to}`),
+      '7': () => dialog('Mkdir', 'New directory via cap-std'),
+      '8': () => dialog('Delete', `Delete ${what}? (demo, nothing is harmed)`),
+      '9': () => dialog('Pull-down', 'Left · File · Command · Options · Right'),
+      '10': () => dialog('Quit', 'Your shell cds to the active panel ✓'),
+    })[f]();
+  }
+  const scr = $('#screen');
+  scr.addEventListener('keydown', e => {
+    const p = st.active, n = panes[p].length, k = e.key; let h = true;
+    if (k === 'ArrowDown' || k === 'j') st.sel[p] = Math.min(n-1, st.sel[p]+1);
+    else if (k === 'ArrowUp' || k === 'k') st.sel[p] = Math.max(0, st.sel[p]-1);
+    else if (k === 'Home') st.sel[p] = 0; else if (k === 'End') st.sel[p] = n-1;
+    else if (k === 'Tab') st.active = 1 - p;
+    else if (k === 'Insert' || (e.ctrlKey && (k === 't' || k === 'T')) || (k === ' ' && panes[p][st.sel[p]][3] !== 'dir')) toggleMark(p);
+    else if (k === ' ') sizeDir(p, st.sel[p]);
+    else if (k === 'Enter') { const r = panes[p][st.sel[p]]; dialog(r[3]==='dir'?'cd':'Open', r[0]); }
+    else if (/^F(10|[1-9])$/.test(k)) act(k.slice(1));
+    else if (k === 'Escape') pop.classList.remove('on');
+    else if (k === 'Backspace') { st.sel[p] = 0; dialog('cd', '..'); }
+    else h = false;
+    if (h) { e.preventDefault(); render(); }
+  });
+  function toggleMark(p) { const i = st.sel[p]; if (i) st.mk[p].has(i) ? st.mk[p].delete(i) : st.mk[p].add(i); st.sel[p] = Math.min(panes[p].length-1, i+1); }
+  const dirSizes = ['284.0KB','1.9MB','96.4KB','412.0KB','1.2GB','18.7MB','7.3MB'];
+  function sizeDir(p, i) {
+    const r = panes[p][i]; if (i === 0 || r[1] !== '<DIR>') return;
+    r[1] = '…'; setTimeout(() => { r[1] = dirSizes[(i + p * 3) % dirSizes.length]; render(); }, 260);
+  }
+  render();
+  // scripted animation; the preview itself is not interactive
+  const script = ['ArrowDown','ArrowDown',' ','ArrowDown','ArrowDown','ArrowDown','ArrowDown','ArrowDown','CtrlT','CtrlT','ArrowUp','Tab','ArrowDown','ArrowDown','ArrowDown','Tab','F5','Home'];
+  let si = 0;
+  if (!matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    const pilot = setInterval(() => {
+      const key = script[si];
+      scr.dispatchEvent(new KeyboardEvent('keydown', key === 'CtrlT' ? { key: 't', ctrlKey: true } : { key }));
+      if (++si === script.length) { si = 0; setTimeout(() => { st.mk = [new Set(), new Set()]; render(); }, 1800); }
+    }, 520);
+  }
+
+  /* ---------- headline typing ---------- */
+  const typeEl = $('#type');
+  const phrases = ['Freaky quick.', 'Zero start-up wait.', 'Built with Rust.', 'All major platforms supported.'];
+  if (!matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    let pi = 0, ci = phrases[0].length, del = true, wait = 40;
+    setInterval(() => {
+      if (wait > 0) return wait--;
+      if (del) { if (--ci <= 0) { del = false; pi = (pi + 1) % phrases.length; } }
+      else if (++ci >= phrases[pi].length) { del = true; wait = 40; }
+      typeEl.textContent = phrases[pi].slice(0, Math.max(0, ci));
+    }, 60);
+  }
+
+  /* ---------- features listing ---------- */
+  const feats = [
+    ['/dual-pane','Tab','Dual-pane','Two independent panels, each with its own sorting, filtering, hidden files, date and size format. Settings are saved separately for left and right.','Tab · Ctrl+U swap','# per-panel state, auto-saved on exit'],
+    ['/remote-sftp','SSH','Remote panels','Connect a panel to any SSH server and browse it like a local directory. Copy, move and even compress (zip runs on the server) across the link. Password, agent or key auth; host keys are checked against known_hosts, and a changed key is refused with a MITM warning.','sftp://user@host:/path','# password · agent · key · TOFU'],
+    ['/archives','Enter','Archives as directories','Enter ZIP and TAR archives like folders and extract from them: .tar, .tar.gz, .tar.bz2, .tar.xz and .tar.zst, plus password-protected ZIPs. Shift+5 creates new archives.','Enter on backup.tar.zst','# zip-slip & tar-slip rejected'],
+    ['hotlist','Esc+/','Directory hotlist','Bookmark folders by hand and organise them into groups. cm also remembers every folder you visit. Start typing for a zoxide-style fuzzy jump across bookmarks and history together, ranked by frecency (how often and how recently you went there), then press Enter.','Esc+/  →  type "invo"  →  Enter','# * marks folders learned from your history'],
+    ['select','Shift++','Select by pattern & query','Select files with DOS patterns like *.jpg; *.pdf, and narrow it down with a small query language: name, ext, size, date, type, perm and exif:date, with comparisons and AND / OR / NOT. Save favourite selections as presets.','Shift++  →  size>10m AND date:this_week','# - unselects · * inverts'],
+    ['find','Alt+7','Find files & folders','Recursive wildcard search that can also grep inside files ("containing text", case-sensitive or whole words) and filter with the query language. Honour .gitignore, or search only the folders you have visited: one level deep, in parallel, very fast.','Alt+7  →  invoice*.pdf  +  "VAT"','# then Navigate, or Panelize the results'],
+    ['multi-rename','Esc+r','Multi-rename tool','Rename hundreds of files in one go with masks: [N] name, [E] extension, [C] counter, date and time tokens, and EXIF tokens like camera model or ISO. Change case, preview every new name live, and save masks as presets.','Esc+r  →  Tatry_[YMD]_[C]','# 20260924 · counter with start / step / digits'],
+    ['compare-sync','Alt+D','Compare & synchronise','Compare two panels by name, size + date, or content, recursively. The results list lets you copy differences to the left or right, with the usual overwrite checks.','Alt+D  →  [x] Recursive','# names · size+mtime · contents'],
+    ['trash','Esc+8','Delete to Trash','Deletes go to the system Trash by default, so a slip of the finger is recoverable. Untick the box for a permanent delete; the default lives in Options → Configuration.','Esc+8  →  [x] Move to Trash','# local panels'],
+    ['viewer','Esc+3','Built-in viewer','Text, hex and word-wrap modes with search. Syntax highlighting for dozens of languages (Rust, Python, JS, TS, YAML, shell…) and Markdown rendering. No size limit, and binaries open in hex.','Esc+3 on main.rs','# 3 colour modes: off · mono · colour'],
+    ['editor','Esc+4','Built-in editor','Undo, search, go-to-line, and hex editing of binaries. Handles very large files. Prefer your own editor? Point Esc+4 at any command.','Esc+4  →  vim %f  ·  code -w %f','# TUI suspends while it runs'],
+    ['drag-out','⇱','Drag files out','Drag a file row, or your whole selection, onto Finder, a browser or an IDE, in terminals that support the kitty drag-and-drop protocol.','kitty ≥ 0.47','# Ghostty once it lands'],
+    ['links','@ ~','Symlinks & hard links','Create absolute or relative symlinks, edit them, make hard links. @ and ~ indicators, with the target shown in the mini-status.','@ → symlink   ~ → hard link','# Unix'],
+    ['self-update','cm --update','Self-update','Pull the latest release straight from GitHub. No package manager needed.','$ cm --update','# or: cm update'],
+  ];
+  let fs = 1;
+  const fitems = $('#fitems');
+  function frender() {
+    fitems.innerHTML = feats.map((f, i) => `<div class="row ${f[0][0]==='/'?'dir':''} ${i===fs?'sel':''}" data-i="${i}"><span>${esc(f[0])}</span><span>${esc(f[1])}</span></div>`).join('');
+    const f = feats[fs];
+    $('#fname').textContent = f[0].replace(/^\//,'');
+    $('#qvt').textContent = ` Quick view: ${f[0].replace(/^\//,'')} `;
+    $('#qvh').textContent = f[2]; $('#qvp').textContent = f[3]; $('#qvc').textContent = f[4]; $('#qvm').textContent = f[5];
+  }
+  fitems.addEventListener('mouseover', e => { const r = e.target.closest('.row'); if (r && +r.dataset.i !== fs) { fs = +r.dataset.i; frender(); } });
+  fitems.addEventListener('click', e => { const r = e.target.closest('.row'); if (r) { fs = +r.dataset.i; frender(); } });
+  $('#flist').addEventListener('keydown', e => {
+    if (e.key === 'ArrowDown') fs = Math.min(feats.length-1, fs+1); else if (e.key === 'ArrowUp') fs = Math.max(0, fs-1); else return;
+    e.preventDefault(); frender();
+  });
+  $('#fcount').textContent = `${feats.length} features`;
+  frender();
+
+  /* ---------- power-tool dialogs (animated, not interactive) ---------- */
+  const photos = [['A7408744.JPG','25.0MB','20260912'],['A7408746.JPG','21.9MB','20260912'],['A7408747.JPG','21.9MB','20260913'],['A7408751.JPG','17.3MB','20260913'],['A7408763.JPG','16.3MB','20260914'],['A7408778.JPG','24.2MB','20260914']];
+  const MASK = 'Tatry_[YMD]_[C]';
+  function expand(mask, f, i) {
+    return mask.replace(/\[(N|YMD|C|E)\]/g, (m, t) => t === 'N' ? f[0].replace(/\.[^.]+$/, '') : t === 'YMD' ? f[2] : t === 'C' ? String(i + 1).padStart(3, '0') : 'jpg');
+  }
+  function mrRender(mask) {
+    $('#mrMask').textContent = mask;
+    const m = mask || '[N]';
+    $('#mrRows').innerHTML = photos.map((f, i) => {
+      const nn = expand(m, f, i) + '.jpg';
+      return `<tr><td>${f[0]}</td><td class="s">${f[1]}</td><td class="n ${mask && mask !== '[N]' ? 'chg' : ''}">${esc(nn)}</td></tr>`;
+    }).join('');
+  }
+
+  /* hotlist: fuzzy filter over bookmarks (no score) + visit history (* with frecency score) */
+  const hot = [
+    ['/Users/you/projects/website', null],
+    ['/Users/you/Documents/invoices', null],
+    ['/Users/you/projects/website/src', 6.8],
+    ['/Users/you/projects/website/public', 5.5],
+    ['/Users/you/Downloads', 4.1],
+    ['/Users/you/Documents/invoices/2026', 3.0],
+    ['/Users/you/Photos/2026/Tatry', 2.2],
+    ['/Users/you/projects/website/src/components', 1.5],
+    ['/var/www/site', 1.2],
+    ['/Users/you/projects/webshop-legacy', 0.8],
+    ['/etc/nginx/sites-available', 0.5],
+    ['/Users/you/projects/website/.github/workflows', 0.2],
+  ];
+  const narrow = matchMedia('(max-width: 640px)');
+  const fuzzy = (q, h) => { let i = 0; for (const ch of h.toLowerCase()) if (ch === q[i]) i++; return i === q.length; };
+  function hotRender(q) {
+    $('#hotQ').textContent = q;
+    const rows = hot.filter(r => fuzzy(q.toLowerCase(), r[0])).sort((a, b) => (a[1] ?? 99) === (b[1] ?? 99) ? 0 : (b[1] ?? 99) - (a[1] ?? 99));
+    $('#hotRows').innerHTML = rows.slice(0, 9).map((r, i) =>
+      `<div class="hr ${i === 0 ? 'sel' : ''}"><span>${i === 0 ? '&gt;' : '&nbsp;'}&nbsp;${r[1] == null ? '&nbsp;' : '*'}</span><span>${esc(narrow.matches ? r[0].replace('/Users/you', '~') : r[0])}</span><span class="sc">${r[1] == null ? '' : r[1].toFixed(1)}</span></div>`).join('');
+  }
+  const HOTQ = 'webs';
+  const SELQ = 'size>10m AND date:this_week';
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (reduce) { mrRender(MASK); $('#selQ').textContent = SELQ; hotRender(HOTQ); }
+  else {
+    let t = 0;
+    const L = MASK.length, Q = SELQ.length;
+    setInterval(() => {
+      t = (t + 1) % (L + 40);
+      mrRender(t === 0 ? '[N]' : MASK.slice(0, Math.min(t, L)));
+      $('#selQ').textContent = SELQ.slice(0, Math.min(Math.round(t * Q / L), Q));
+      hotRender(HOTQ.slice(0, Math.max(0, Math.min(Math.floor((t - 4) / 3), HOTQ.length))));
+    }, 150);
+  }
+
+  /* ---------- copy ---------- */
+  async function copy(txt, btn) {
+    try { await navigator.clipboard.writeText(txt); } catch { const t = document.createElement('textarea'); t.value = txt; document.body.appendChild(t); t.select(); try { document.execCommand('copy'); } catch {} t.remove(); }
+    const o = btn.textContent; btn.textContent = 'copied'; btn.classList.add('ok'); setTimeout(() => { btn.textContent = o; btn.classList.remove('ok'); }, 1300);
+  }
+  $$('[data-copy]').forEach(b => b.addEventListener('click', () => copy(b.dataset.copy, b)));
+
+  /* ---------- install radios ---------- */
+  const inst = [
+    { c: 'curl -fsSL https://raw.githubusercontent.com/elkaszcz/el-commander-releases/main/install.sh | sh', p: '$', n: 'Installs the <code>cm</code> binary to <code>~/.local/bin/</code> and verifies its Minisign signature. Update any time with <code>cm --update</code>.' },
+    { c: 'irm https://raw.githubusercontent.com/elkaszcz/el-commander-releases/main/install.ps1 | iex', p: 'PS>', n: 'Installs <code>cm.exe</code> to <code>%LOCALAPPDATA%\\Programs\\cm\\</code> and adds it to your user PATH.' },
+    { c: 'minisign -Vm SHA256SUMS -p minisign.pub\nsha256sum -c SHA256SUMS --ignore-missing', p: '$', n: 'Grab your archive plus <code>SHA256SUMS</code> and <code>SHA256SUMS.minisig</code> from the <a href="https://github.com/elkaszcz/el-commander-releases/releases/latest" style="color:var(--yellow);text-decoration:underline">latest release</a>, and <a href="https://raw.githubusercontent.com/elkaszcz/el-commander-releases/main/minisign.pub" style="color:var(--yellow);text-decoration:underline">minisign.pub</a>. Builds for macOS (Apple Silicon, Intel), Linux (x86_64, arm64, armv7) and Windows (x86_64).' },
+  ];
+  const labels = ['macOS / Linux', 'Windows', 'Manual download'];
+  function tab(i) {
+    $$('#radios button').forEach((b, j) => { b.textContent = `(${i===j?'•':' '}) ${labels[j]}`; b.setAttribute('aria-checked', i===j); });
+    $('#icode').innerHTML = inst[i].c.split('\n').map(l => `${inst[i].p} ${esc(l)}`).join('\n');
+    $('#inote').innerHTML = inst[i].n;
+    $('#icopy').onclick = e => copy(inst[i].c, e.currentTarget);
+  }
+  $$('#radios button').forEach(b => b.addEventListener('click', () => tab(+b.dataset.t)));
+  tab(0);
+
+  /* ---------- reveal + bars ---------- */
+  const io = new IntersectionObserver(es => es.forEach(e => {
+    if (!e.isIntersecting) return;
+    e.target.classList.add('in'); io.unobserve(e.target);
+    if (e.target.classList.contains('bench-frame')) $$('.bar i', e.target).forEach((b, k) => setTimeout(() => b.style.width = Math.max(.6, +b.dataset.w) + '%', 120 * k));
+  }), { threshold: .2 });
+  $$('.reveal').forEach(el => io.observe(el));
+})();
+</script>
+</body>
+</html>
