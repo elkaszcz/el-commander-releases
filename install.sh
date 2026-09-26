@@ -3,9 +3,17 @@
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/elkaszcz/el-commander-releases/main/install.sh | sh
+#   curl -fsSL .../install.sh | sh -s -- --with-pdf     # also install PDF support
+#   curl -fsSL .../install.sh | sh -s -- --no-pdf       # don't ask about it
 #
 # Downloads the latest release, verifies its Minisign signature and SHA-256
 # checksum, installs the `cm` binary to ~/tools, and adds ~/tools to your PATH.
+#
+# PDF support (liteparse `lit`, for the viewer's PDF views) is optional. The
+# installer asks on the terminal; --with-pdf / --no-pdf or CM_WITH_PDF=1/0
+# answer in advance. With no terminal and no answer, it is not installed.
+# It goes to ~/.cm/tools/lit/<version>/, verified like cm, and `cm update`
+# keeps it current (`cm update --with-pdf` / `--no-pdf` change your mind).
 set -eu
 
 REPO="elkaszcz/el-commander-releases"
@@ -17,8 +25,25 @@ MINISIGN_PUBKEY="RWQ2phjehTa48pOz8sOJEliKh7S5FVT+YBcyerOJTjrBXwsX7oAkWAwD"
 
 red='\033[31m'; green='\033[32m'; reset='\033[0m'
 err()  { printf "${red}Error:${reset} %s\n" "$1" >&2; exit 1; }
+warn() { printf "${red}Warning:${reset} %s\n" "$1" >&2; }
 info() { printf '%s\n' "$1"; }
 ok()   { printf "${green}%s${reset}\n" "$1"; }
+
+# 0. Options. want_pdf: 1 = install PDF support, 0 = don't, "" = ask.
+want_pdf=""
+case "${CM_WITH_PDF:-}" in
+  1|y|yes|true)  want_pdf=1 ;;
+  0|n|no|false)  want_pdf=0 ;;
+  "") ;;
+  *) err "CM_WITH_PDF must be 1 or 0 (got '${CM_WITH_PDF}')." ;;
+esac
+for arg in "$@"; do
+  case "$arg" in
+    --with-pdf) want_pdf=1 ;;
+    --no-pdf)   want_pdf=0 ;;
+    *) err "Unknown option: $arg (supported: --with-pdf, --no-pdf)" ;;
+  esac
+done
 
 # 1. Detect platform -> Rust target triple.
 os="$(uname -s)"
@@ -97,6 +122,10 @@ else
   err "Need sha256sum or shasum to verify the download."
 fi
 [ "$expected" = "$actual" ] || err "Checksum mismatch -- refusing to install."
+sha256() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}'
+  else shasum -a 256 "$1" | awk '{print $1}'; fi
+}
 
 # 5. Extract and install.
 info "Installing to $INSTALL_DIR ..."
@@ -110,6 +139,90 @@ chmod +x "$INSTALL_DIR/$BIN"
 # macOS: clear the quarantine attribute so Gatekeeper doesn't block it.
 if [ "$os" = "Darwin" ]; then
   xattr -d com.apple.quarantine "$INSTALL_DIR/$BIN" 2>/dev/null || true
+fi
+
+# 5b. Optional PDF support: liteparse `lit`, listed in the same verified
+#     SHA256SUMS. A failure here leaves cm installed and PDF support off.
+pdf_note=""
+install_pdf() {
+  lit_asset="$(awk -v t="$target" '
+      { n = $2; sub(/^\*/, "", n) }
+      n ~ ("^lit-[0-9]+\\.[0-9]+\\.[0-9]+-" t "\\.tar\\.gz$") { print n; exit }
+    ' "$tmp/SHA256SUMS")"
+  if [ -z "$lit_asset" ]; then
+    warn "This release has no PDF support package for $target; skipping it."
+    return 0
+  fi
+  lit_ver="$(printf '%s\n' "$lit_asset" | sed -E 's/^lit-([0-9]+\.[0-9]+\.[0-9]+)-.*/\1/')"
+  case "$os" in
+    Darwin) lib="libpdfium.dylib" ;;
+    *)      lib="libpdfium.so" ;;
+  esac
+  root="$HOME/.cm/tools/lit"
+  dest="$root/$lit_ver"
+  if [ -x "$dest/lit" ]; then
+    info "PDF support (lit $lit_ver) is already installed."
+    return 0
+  fi
+
+  info "Downloading $lit_asset ..."
+  dl "$base/$lit_asset" "$tmp/$lit_asset" || { warn "Download failed: $base/$lit_asset"; return 1; }
+  lit_expected="$(awk -v n="$lit_asset" '{ m = $2; sub(/^\*/, "", m) } m == n { print $1; exit }' "$tmp/SHA256SUMS")"
+  [ "$(sha256 "$tmp/$lit_asset")" = "$lit_expected" ] \
+    || { warn "Checksum mismatch for $lit_asset -- PDF support not installed."; return 1; }
+
+  # Only the expected regular files under the one expected directory: no
+  # links, no `..`, nothing else (cm's own installer refuses the same).
+  top="lit-$lit_ver-$target"
+  if tar -tvzf "$tmp/$lit_asset" | grep -Eq '^[^-d]'; then
+    warn "$lit_asset contains links or special files -- PDF support not installed."; return 1
+  fi
+  bad="$(tar -tzf "$tmp/$lit_asset" | grep -Ev "^$top/((lit|$lib)|LICENSES/([A-Za-z0-9._-]+)?)?\$" || true)"
+  if [ -n "$bad" ] || tar -tzf "$tmp/$lit_asset" | grep -q '\.\.'; then
+    warn "$lit_asset holds unexpected entries -- PDF support not installed."; return 1
+  fi
+
+  mkdir -p "$HOME/.cm/tools"
+  chmod 700 "$HOME/.cm/tools"
+  mkdir -p "$root"
+  chmod 700 "$root"
+  stage="$(mktemp -d "$root/.install-$lit_ver.XXXXXX")"   # 0700
+  if ! tar -xzf "$tmp/$lit_asset" -C "$stage" \
+     || [ ! -f "$stage/$top/lit" ] || [ ! -f "$stage/$top/$lib" ]; then
+    rm -rf "$stage"; warn "Could not unpack $lit_asset -- PDF support not installed."; return 1
+  fi
+  chmod 700 "$stage/$top"
+  if [ "$os" = "Darwin" ]; then
+    xattr -dr com.apple.quarantine "$stage/$top" 2>/dev/null || true
+  fi
+  rm -rf "$dest"   # an interrupted earlier install, without a usable lit
+  mv "$stage/$top" "$dest"
+  rm -rf "$stage"
+  pdf_note="PDF support (lit $lit_ver) installed to $dest"
+}
+
+if [ "$target" = "armv7-unknown-linux-gnueabihf" ]; then
+  [ "$want_pdf" = "1" ] && warn "PDF support isn't available for armv7 yet."
+else
+  if [ -z "$want_pdf" ]; then
+    # Ask on the terminal: with `curl | sh`, stdin is this script.
+    if (: </dev/tty) 2>/dev/null; then
+      echo
+      info "Install PDF support? (liteparse \`lit\`, ~12 MB download)"
+      info "It adds the viewer's PDF views: Markdown and layout text (F3)."
+      printf 'Install PDF support? [y/N] '
+      read -r answer </dev/tty || answer=""
+      case "$answer" in
+        y|Y|yes|YES) want_pdf=1 ;;
+        *)           want_pdf=0 ;;
+      esac
+    else
+      want_pdf=0
+    fi
+  fi
+  if [ "$want_pdf" = "1" ]; then
+    install_pdf || info "You can retry later with: cm update --with-pdf"
+  fi
 fi
 
 # 6. Configure the shell: put ~/tools on PATH and install the `cm` wrapper that
@@ -157,6 +270,7 @@ fi
 # 7. Report.
 echo
 ok "Success: cm $tag installed to $INSTALL_DIR/$BIN"
+[ -n "$pdf_note" ] && ok "Success: $pdf_note"
 if [ -n "$configured" ]; then
   info "Updated $configured (added ~/tools to PATH + cm directory-follow wrapper)."
   info "Open a new terminal (or run: . \"$configured\"), then run: cm"
