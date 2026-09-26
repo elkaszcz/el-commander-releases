@@ -2,11 +2,19 @@
 #
 # Usage:
 #   irm https://raw.githubusercontent.com/elkaszcz/el-commander-releases/main/install.ps1 | iex
+#   & ([scriptblock]::Create((irm .../install.ps1))) -WithPdf   # also install PDF support
+#   & ([scriptblock]::Create((irm .../install.ps1))) -NoPdf     # don't ask about it
 #
 # Downloads the latest release, verifies its Minisign signature and SHA-256
 # checksum, installs cm.exe to ~\tools, adds ~\tools to your user PATH, and
 # installs a `cm` wrapper that follows el-commander into its last directory
 # when you quit.
+#
+# PDF support (liteparse `lit`, for the viewer's PDF views) is optional: the
+# installer asks, or -WithPdf / -NoPdf / $env:CM_WITH_PDF = 1/0 answer in
+# advance. It goes to ~\.cm\tools\lit\<version>\, verified like cm, and
+# `cm update` keeps it current (`cm update --with-pdf` / `--no-pdf`).
+param([switch]$WithPdf, [switch]$NoPdf)
 $ErrorActionPreference = "Stop"
 
 $Repo       = "elkaszcz/el-commander-releases"
@@ -16,6 +24,19 @@ $InstallDir = Join-Path $HOME "tools"
 $MinisignPubKey = "RWQ2phjehTa48pOz8sOJEliKh7S5FVT+YBcyerOJTjrBXwsX7oAkWAwD"
 
 function Fail($msg) { Write-Host "Error: $msg" -ForegroundColor Red; exit 1 }
+function Warn($msg) { Write-Host "Warning: $msg" -ForegroundColor Yellow }
+
+# 0. Options: $wantPdf is $true / $false, or $null to ask.
+if ($WithPdf -and $NoPdf) { Fail "Use either -WithPdf or -NoPdf, not both." }
+$wantPdf = $null
+switch -Regex ("$env:CM_WITH_PDF") {
+    '^(1|y|yes|true)$'  { $wantPdf = $true }
+    '^(0|n|no|false)$'  { $wantPdf = $false }
+    '^$'                { }
+    default             { Fail "CM_WITH_PDF must be 1 or 0 (got '$env:CM_WITH_PDF')." }
+}
+if ($WithPdf) { $wantPdf = $true }
+if ($NoPdf)   { $wantPdf = $false }
 
 # 1. Detect architecture (only the 64-bit x86 build is published).
 $arch = $env:PROCESSOR_ARCHITECTURE
@@ -79,6 +100,74 @@ try {
     if (-not $bin) { Fail "cm.exe not found inside the archive." }
     Copy-Item -Path $bin.FullName -Destination (Join-Path $InstallDir "cm.exe") -Force
 
+    # 5b. Optional PDF support: liteparse `lit`, listed in the same verified
+    #     SHA256SUMS. A failure here leaves cm installed and PDF support off.
+    $pdfNote = $null
+    if ($null -eq $wantPdf) {
+        $interactive = [Environment]::UserInteractive -and -not [Console]::IsInputRedirected
+        if ($interactive) {
+            Write-Host ""
+            Write-Host "Install PDF support? (liteparse ``lit``, ~12 MB download)"
+            Write-Host "It adds the viewer's PDF views: Markdown and layout text (F3)."
+            $answer = Read-Host "Install PDF support? [y/N]"
+            $wantPdf = $answer -match '^(y|yes)$'
+        } else {
+            $wantPdf = $false
+        }
+    }
+    if ($wantPdf) {
+        try {
+            $litLine = Get-Content $sums | Where-Object {
+                $_ -match ('^[0-9a-fA-F]{64}\s+\*?(lit-(\d+\.\d+\.\d+)-' + [regex]::Escape($target) + '\.tar\.gz)$')
+            } | Select-Object -First 1
+            if (-not $litLine) { throw "This release has no PDF support package for $target." }
+            $null = $litLine -match ('^([0-9a-fA-F]{64})\s+\*?(lit-(\d+\.\d+\.\d+)-' + [regex]::Escape($target) + '\.tar\.gz)$')
+            $litExpected = $Matches[1].ToLower(); $litAsset = $Matches[2]; $litVer = $Matches[3]
+            $root = Join-Path $HOME ".cm\tools\lit"
+            $dest = Join-Path $root $litVer
+            if (Test-Path (Join-Path $dest "lit.exe")) {
+                Write-Host "PDF support (lit $litVer) is already installed."
+            } else {
+                Write-Host "Downloading $litAsset ..."
+                $litTgz = Join-Path $tmp $litAsset
+                Invoke-WebRequest -Uri "$base/$litAsset" -OutFile $litTgz -UseBasicParsing
+                $litActual = (Get-FileHash -Algorithm SHA256 -Path $litTgz).Hash.ToLower()
+                if ($litExpected -ne $litActual) { throw "Checksum mismatch for $litAsset." }
+
+                # Only the expected regular files under the one expected
+                # directory (cm's own installer refuses the same).
+                $top = "lit-$litVer-$target"
+                $listing = & tar.exe -tvzf $litTgz
+                if ($LASTEXITCODE -ne 0) { throw "Cannot read $litAsset." }
+                if ($listing | Where-Object { $_ -notmatch '^[-d]' }) { throw "$litAsset contains links or special files." }
+                $names = & tar.exe -tzf $litTgz
+                $allowed = '^' + [regex]::Escape($top) + '/((lit\.exe|pdfium\.dll)|LICENSES/([A-Za-z0-9._-]+)?)?$'
+                if ($names | Where-Object { $_ -notmatch $allowed -or $_ -match '\.\.' }) {
+                    throw "$litAsset holds unexpected entries."
+                }
+
+                $stage = Join-Path $root (".install-$litVer-" + [guid]::NewGuid())
+                New-Item -ItemType Directory -Path $stage -Force | Out-Null
+                try {
+                    & tar.exe -xzf $litTgz -C $stage
+                    if ($LASTEXITCODE -ne 0) { throw "Could not unpack $litAsset." }
+                    $unpacked = Join-Path $stage $top
+                    foreach ($f in @("lit.exe", "pdfium.dll")) {
+                        if (-not (Test-Path -PathType Leaf (Join-Path $unpacked $f))) { throw "$litAsset lacks $f." }
+                    }
+                    if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }
+                    Move-Item -Path $unpacked -Destination $dest
+                } finally {
+                    Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
+                }
+                $pdfNote = "PDF support (lit $litVer) installed to $dest"
+            }
+        } catch {
+            Warn "$($_.Exception.Message) PDF support not installed."
+            Write-Host "You can retry later with: cm update --with-pdf"
+        }
+    }
+
     # 6. Add ~\tools to the user PATH.
     $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
     if ($userPath -notlike "*$InstallDir*") {
@@ -113,6 +202,7 @@ function cm {
 
     Write-Host ""
     Write-Host "Success: cm $tag installed to $InstallDir\cm.exe" -ForegroundColor Green
+    if ($pdfNote) { Write-Host "Success: $pdfNote" -ForegroundColor Green }
     Write-Host "Open a new terminal for PATH and profile changes to take effect, then run: cm"
 }
 catch {

@@ -747,7 +747,7 @@ footer .wrap{display:flex;justify-content:space-between;flex-wrap:wrap;gap:12px;
 
   /* ---------- install radios ---------- */
   const inst = [
-    { c: 'curl -fsSL https://raw.githubusercontent.com/elkaszcz/el-commander-releases/main/install.sh | sh', p: '$', n: 'Installs the <code>cm</code> binary to <code>~/.local/bin/</code> and verifies its Minisign signature. Update any time with <code>cm update</code>.' },
+    { c: 'curl -fsSL https://raw.githubusercontent.com/elkaszcz/el-commander-releases/main/install.sh | sh', p: '$', n: 'Installs the <code>cm</code> binary to <code>~/.local/bin/</code> and verifies its Minisign signature. Offers optional PDF support (<code>--with-pdf</code> to say yes up front). Update any time with <code>cm update</code>.' },
     { c: 'irm https://raw.githubusercontent.com/elkaszcz/el-commander-releases/main/install.ps1 | iex', p: 'PS>', n: 'Installs <code>cm.exe</code> to <code>%LOCALAPPDATA%\\Programs\\cm\\</code> and adds it to your user PATH.' },
     { c: 'minisign -Vm SHA256SUMS -p minisign.pub\nsha256sum -c SHA256SUMS --ignore-missing', p: '$', n: 'Grab your archive plus <code>SHA256SUMS</code> and <code>SHA256SUMS.minisig</code> from the <a href="https://github.com/elkaszcz/el-commander-releases/releases/latest" style="color:var(--yellow);text-decoration:underline">latest release</a>, and <a href="https://raw.githubusercontent.com/elkaszcz/el-commander-releases/main/minisign.pub" style="color:var(--yellow);text-decoration:underline">minisign.pub</a>. Builds for macOS (Apple Silicon, Intel), Linux (x86_64, arm64, armv7) and Windows (x86_64).' },
   ];
